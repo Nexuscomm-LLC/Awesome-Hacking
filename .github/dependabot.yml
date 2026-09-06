@@ -1,0 +1,18 @@
+version: 2
+
+updates:
+  # Watch the third-party actions used by the workflows in .github/workflows/.
+  # This repository ships no code, so actions are its only real dependency —
+  # and the only component that executes with write access to the repository.
+  #
+  # This also makes commit-SHA pinning maintainable: when an action is pinned
+  # to a full-length SHA, Dependabot updates the SHA and keeps the human
+  # readable version in the trailing comment current.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
