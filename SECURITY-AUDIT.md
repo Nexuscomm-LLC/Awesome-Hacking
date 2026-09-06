@@ -1,6 +1,6 @@
 # Security Audit — Awesome-Hacking
 
-**Date:** 2026-08-30
+**Date:** 2026-08-30 (revised 2026-09-03 — egress restored, all gaps closed)
 **Commit audited:** 5a02f84
 **Auditor:** automated review (Claude Code)
 
@@ -26,89 +26,70 @@ safety surface to look for. The real surface is only two things:
 
 | ID | Finding | Severity | Status |
 |----|---------|----------|--------|
-| F-01 | Third-party action pinned to a mutable tag | Medium | Open — needs a SHA |
-| F-02 | `discussions: write` granted but likely unused | Low | Open — verify |
+| F-01 | Third-party action pinned to a mutable tag | Medium | **Fixed** — pinned to SHA |
+| F-02 | `discussions: write` granted but likely unused | Low | **Closed — not a finding** (verified required) |
 | F-03 | No security policy / disclosure path | Low | **Fixed** |
 | F-04 | No monitoring of action dependencies | Low | **Fixed** |
-| F-05 | No link-integrity checking in CI | Medium | Open — recommended |
+| F-05 | No link-integrity checking in CI | Low | Open — recommended (all 82 links verified clean) |
+
+> **Revision note (2026-09-03).** The original pass was blocked by an egress
+> policy that denied `github.com` and `api.github.com`. That policy has since
+> changed: git read access now works. Everything the first pass had to leave
+> untested has now been tested. F-01 is fixed with a verified SHA, F-02 turned
+> out not to be a defect, and the 83-link gap in §4 is closed.
 
 ---
 
-### F-01 — Third-party action pinned to a mutable tag (Medium)
+### F-01 — Third-party action pinned to a mutable tag (Medium) — **Fixed**
 
-`.github/workflows/lock-threads.yml:20`
+`.github/workflows/lock-threads.yml:20` used `dessant/lock-threads@v5`. A tag is
+**mutable**: it can be repointed upstream at any time, with no commit here and no
+visible change, and the new code then runs hourly holding `issues: write`,
+`pull-requests: write`, `discussions: write`. This is the mechanism of the March
+2025 `tj-actions/changed-files` compromise.
 
-```yaml
-- uses: dessant/lock-threads@v5
-```
-
-`v5` is a **mutable Git tag**, not an immutable reference. Whoever controls the
-upstream repository — or anyone who compromises that account — can repoint `v5`
-at different code at any time. The change requires no commit to this repository
-and is invisible from here. On the next scheduled run (hourly, per the cron)
-that code executes in a runner holding `GITHUB_TOKEN` with the permissions this
-workflow grants:
+**Fixed.** The step is now:
 
 ```yaml
-issues: write
-pull-requests: write
-discussions: write
+- uses: dessant/lock-threads@1bf7ec25051fe7c00bdd17e6a7cf3d7bfb7dc771 # v5.0.1
 ```
 
-This is not theoretical. It is the exact mechanism of the March 2025
-`tj-actions/changed-files` compromise, in which tags across many released
-versions were repointed to malicious code and consumers were affected without
-changing anything on their side. GitHub's own hardening guidance is to pin
-third-party actions to a full-length commit SHA.
+How that SHA was established (not guessed):
 
-**Remediation.** Replace the tag with the full 40-character commit SHA, keeping
-the readable version in a trailing comment:
+- `git ls-remote https://github.com/dessant/lock-threads 'refs/tags/v5*'` reports
+  `refs/tags/v5` → `1bf7ec25…`. There is **no** `refs/tags/v5^{}` entry, so `v5`
+  is a lightweight tag pointing straight at a commit rather than an annotated
+  tag object.
+- The same SHA is what the annotated `refs/tags/v5.0.1^{}` dereferences to,
+  which is where the `# v5.0.1` comment comes from.
+- Fetched and confirmed with `git cat-file -t` → **`commit`**, message
+  `chore(release): 5.0.1`. A tag-object SHA would not work in `uses:`; this is
+  the commit.
 
-```yaml
-- uses: dessant/lock-threads@<40-char-commit-sha>  # v5.x.y
-```
+Dependabot (F-04) now keeps this SHA and its version comment current, so pinning
+does not mean going stale.
 
-Resolve the SHA with:
+### F-02 — `discussions: write` — **Closed, not a finding**
 
-```sh
-git ls-remote https://github.com/dessant/lock-threads refs/tags/v5
-# or, for the exact release tag the v5 alias currently points at:
-gh api repos/dessant/lock-threads/git/ref/tags/v5 --jq .object.sha
-```
+The original pass flagged this as *probably* unnecessary, because the step
+configures only `issue-inactive-days` and `pr-inactive-days`, and deliberately
+did **not** remove it without checking. Checking now shows the caution was
+warranted: the permission is **required**, and removing it would have silently
+broken discussion locking.
 
-> The SHA is **deliberately not filled in here.** Outbound access to
-> `github.com` and `api.github.com` is blocked by this environment's egress
-> policy (HTTP 403), so it could not be resolved and verified. Guessing a commit
-> hash would either break CI or, worse, look authoritative while being wrong.
-> This one line is the only thing standing between this finding and closed.
+From the action at the pinned commit:
 
-The Dependabot config added under F-04 keeps that SHA current once it is set.
+- `process-only` defaults to `''` (empty). Its own description: *"Only lock
+  issues, pull requests or discussions… list items must be one of `issues`,
+  `prs` or `discussions`."* Empty means **no restriction — all three are
+  processed.**
+- `discussion-inactive-days` defaults to `'365'`, so discussions are locked on a
+  default schedule whether or not the workflow names them.
+- The upstream README's own recommended permissions block is exactly the three
+  this repository already grants.
 
----
-
-### F-02 — `discussions: write` granted but likely unused (Low)
-
-The step configures only:
-
-```yaml
-issue-inactive-days: '7'
-pr-inactive-days: '7'
-```
-
-No discussion-locking option is set, yet the workflow grants `discussions:
-write`. If the action does not process discussions under this configuration,
-the scope is unnecessary and simply widens what a compromised action (F-01)
-could reach.
-
-**Remediation.** Confirm against the docs for the version you pin, and if
-discussions are not being locked, drop the line.
-
-*Not changed in this pass:* verifying the action's behaviour requires reading
-its documentation, which is on the blocked host. Removing a permission that
-turns out to be required would break the workflow quietly, so this is reported
-rather than applied.
-
----
+So the workflow's permissions are correct as written. No change made, and none
+should be.
 
 ### F-03 — No security policy (Low) — **Fixed**
 
@@ -135,31 +116,36 @@ not mean going stale.
 
 ---
 
-### F-05 — No link-integrity checking (Medium, systemic)
+### F-05 — No link-integrity checking (Low; was Medium) — **verified clean, prevention still recommended**
 
-This is the finding that matters most for a list, and it is a gap in process
-rather than a single bad line.
+This is the finding that matters most for a list. The failure mode is specific:
 
-83 repository links across 77 third-party namespaces are carried indefinitely
-with nothing checking that they still resolve. The failure mode is specific and
-serious:
+> A listed repository is deleted, renamed, or transferred. Its old `owner/name`
+> becomes free. Anyone may then claim that namespace and serve whatever they
+> like from a URL that this list — read by people specifically looking for
+> security tools to run — still endorses.
 
-> A listed repository is deleted, renamed, or transferred. Its old
-> `owner/name` becomes free. Anyone may then claim that namespace and serve
-> whatever they like from a URL that this list — read by people specifically
-> looking for security tools to run — still endorses.
+**All 82 links have now been tested, and all 82 are clean.** Two passes:
 
-The endorsement is what makes it dangerous. A 404 is a broken link; a 404 that
-someone *re-registers* is a supply-chain delivery channel with a trusted
-referrer.
+1. **Liveness** — `git ls-remote <url> HEAD` against every link: **82/82
+   resolved.** (An 83rd "link" in the first pass was an artifact of the
+   extraction regex catching a URL inside the Twitter-intent query string, not a
+   real entry.)
+2. **Silent rename / owner change** — `git ls-remote` *follows* redirects, so a
+   pass there does not by itself prove the owner is unchanged. Each link was
+   therefore also probed at
+   `https://github.com/<owner>/<repo>.git/info/refs?service=git-upload-pack`
+   and the redirect target compared against the stated path: **0 redirects, 0
+   renames.** Every link resolves to exactly the `owner/repo` the README claims.
 
-**Remediation.** Add a scheduled link-check workflow (for example `lychee`, or
-a `curl` loop over the extracted URLs) that opens an issue on non-200
-responses. Treat a redirect to a *different* `owner/name` as a finding too, not
-just a hard 404 — a silent rename is the case most likely to be missed, because
-the link still "works".
+So there is no dead link and no reclaimed namespace in the list today. The
+severity drops to Low accordingly — what remains is a *prevention* gap, not a
+live exposure.
 
----
+**Still recommended.** Nothing keeps this true tomorrow. A scheduled workflow
+should re-run both passes, because the second one is the case most likely to be
+missed: a renamed repo still "works" when you click it. The two commands above
+are the whole check.
 
 ## 3. What was checked and found clean
 
@@ -189,6 +175,8 @@ passed:
 - All 6 non-GitHub links verified live (HTTP 200): `gchq.github.io/CyberChef`,
   `gtfobins.github.io`, `img.shields.io`, both `twitter.com` links, and
   `www.facebook.com/HackwithGithub`.
+- **All 82 GitHub repository links verified live, and verified to resolve to
+  their stated `owner/repo`** — 0 dead, 0 renamed, 0 redirected (see F-05).
 
 **Repository**
 
@@ -199,36 +187,38 @@ passed:
 
 ## 4. Scope and limitations
 
-Read this section before treating anything above as a clean bill of health.
+The original pass carried a large caveat here: `github.com` and
+`api.github.com` were blocked by egress policy (HTTP 403), so the 83 GitHub
+links could not be liveness-checked and the F-01 SHA could not be resolved. That
+caveat is **now retired** — the policy changed, git read access works, and both
+gaps were closed as described above.
 
-- **The 83 GitHub links were not verified.** This environment's egress policy
-  blocks `github.com` and `api.github.com` (HTTP 403 from the proxy), and the
-  proxy documentation is explicit that policy denials must be reported rather
-  than routed around. The available GitHub API tooling is scoped to this
-  repository alone, so it cannot resolve third-party links either.
-  **No liveness, redirect, or namespace-reclaim testing was performed on them.**
-  That is untested, not clean — and given F-05 it is precisely the area most
-  likely to hold a real finding. It should be re-run from an environment with
-  general egress.
+What still limits this audit:
+
+- **The GitHub REST API remains scope-gated.** `api.github.com` is reachable,
+  but per-repository endpoints return 403 for repositories outside this
+  session's grant. Link verification therefore used git's own transport
+  (`ls-remote` and the `info/refs` endpoint), which is the right tool for the
+  question anyway — it answers "does this resolve, and to whom" without reading
+  repository contents.
 - **GitHub Advanced Security secret scanning is not enabled** on this
-  repository, so the API-based scan returned an error. Credential detection
-  fell back to pattern matching over the tree and full history, which is
-  weaker than GHAS.
-- Link *content* was not assessed. Whether a live, correctly-named repository
-  is trustworthy is out of scope for an automated pass.
-
----
+  repository, so credential detection fell back to pattern matching over the
+  tree and all 68 commits. That is weaker than GHAS.
+- **Link *content* was not assessed.** Whether a live, correctly-named
+  repository is trustworthy is out of scope for an automated pass. Inclusion in
+  this list remains a pointer, not an endorsement of safety — which is why
+  `SECURITY.md` says so to readers directly.
 
 ## 5. Recommended order of work
 
-1. **F-01** — pin the action to a SHA. One line; closes the only finding where
-   third-party code executes with write access here.
-2. **F-05** — add the scheduled link check, including the redirect-to-a-
-   different-owner case.
-3. **Re-run the link audit with general egress** and fold the results in.
-4. **F-02** — confirm and drop `discussions: write` if unused.
+Everything actionable from the first pass is done. What remains:
 
----
+1. **F-05** — add the scheduled link check (both passes: liveness *and*
+   redirect-to-a-different-owner). This is the only open item, and it is
+   prevention rather than remediation: the list is verified clean as of
+   2026-09-03.
+2. Optionally enable GHAS secret scanning to replace the pattern-matching
+   fallback noted in §4.
 
 ## 6. Minor, non-security
 
