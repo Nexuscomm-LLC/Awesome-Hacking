@@ -1,0 +1,9 @@
+# Awesome-Hacking MCP Server Dependencies
+
+# Required for MCP server
+mcp[cli]>=1.2.0
+
+# Optional: Enhanced features for hacking_knowledge.py
+requests>=2.28.0          # Link validation and GitHub API
+fuzzywuzzy>=0.18.0        # Fuzzy search matching
+python-Levenshtein>=0.12  # Speed up fuzzywuzzy
