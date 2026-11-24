@@ -1,7 +1,7 @@
 # Awesome-Hacking MCP Server Dependencies
 
 # Required for MCP server
-mcp[cli]>=1.2.0
+mcp[cli]>=1.2.0,<2       # mcp_server.py uses the 1.x FastMCP API (renamed in 2.x)
 
 # Optional: Enhanced features for hacking_knowledge.py
 requests>=2.28.0          # Link validation and GitHub API
